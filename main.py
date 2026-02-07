@@ -2,17 +2,15 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import csv
 import io
-from fastapi import FastAPI
 
-app = FastAPI()
+app = FastAPI(title="WZ Verify API")
 
+# --- Healthcheck / root ---
 @app.get("/")
 def root():
     return {"status": "ok"}
 
-
-app = FastAPI()
-
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,6 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Helpers ---
 def parse_table(text: str):
     rows = []
     reader = csv.reader(io.StringIO(text), delimiter="\t")
@@ -31,6 +30,7 @@ def parse_table(text: str):
             })
     return rows
 
+# --- API ---
 @app.post("/compare")
 async def compare(
     table: str = Form(...),
