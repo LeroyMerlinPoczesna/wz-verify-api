@@ -3,10 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import csv
 import io
 
-@app.get("/")
-def root():
-    return {"status": "ok"}
-
 app = FastAPI()
 
 app.add_middleware(
