@@ -1,13 +1,13 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-import csv
-import io
-import os
-import openai
+import csv, io, os
+from typing import Optional
 
-openai.api_key = os.environ.get("OPENAI_API_KEY")
-
-app = FastAPI(title="Logistics AI Verifier")
+app = FastAPI(
+    title="Logistics AI Verifier",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,63 +16,58 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def parse_text_table(text: str):
+@app.get("/")
+def health():
+    return {"status": "OK"}
+
+def parse_text(text: str):
     rows = []
     reader = csv.reader(io.StringIO(text), delimiter="\t")
     for r in reader:
         if len(r) >= 2:
             try:
-                rows.append({"sku": r[0].strip(), "qty": float(r[1].replace(",", ".") )})
+                qty = float(r[1].replace(",", "."))
             except:
-                rows.append({"sku": r[0].strip(), "qty": 0})
+                qty = 0
+            rows.append({"sku": r[0].strip(), "qty": qty})
     return rows
 
 @app.post("/compare")
 async def compare(
     wz: UploadFile = File(...),
-    erp_text: str = Form(None),
-    erp_file: UploadFile = File(None)
+    erp_text: Optional[str] = Form(None),
+    erp_file: Optional[UploadFile] = File(None),
 ):
-    # wczytaj WZ
-    wz_data = (await wz.read()).decode("utf-8", errors="ignore")
+    wz_raw = await wz.read()
+    wz_text = wz_raw.decode("utf-8", errors="ignore")
 
-    # ERP – z pliku lub z textarea
-    erp_data = ""
-    if erp_text:
-        erp_data = erp_text
-    elif erp_file:
-        erp_data = (await erp_file.read()).decode("utf-8", errors="ignore")
+    if erp_file:
+        erp_text = (await erp_file.read()).decode("utf-8", errors="ignore")
 
-    wz_rows = parse_text_table(wz_data)
-    erp_rows = parse_text_table(erp_data)
+    if not erp_text:
+        return {"error": "Brak danych ERP"}
 
-    # AI-Agent prompt
-    system_prompt = """
-You are a smart logistics assistant.
-Compare two lists of items (WZ and ERP).
-Return a JSON array with: sku, qty_wz, qty_erp, status.
-Status = OK, DIFFERENT, MISSING.
-"""
-    wz_list_str = "\n".join([f"{r['sku']}\t{r['qty']}" for r in wz_rows])
-    erp_list_str = "\n".join([f"{r['sku']}\t{r['qty']}" for r in erp_rows])
+    wz_rows = parse_text(wz_text)
+    erp_rows = parse_text(erp_text)
 
-    user_prompt = f"""
-WZ:
-{wz_list_str}
+    result = []
+    for w in wz_rows:
+        e = next((x for x in erp_rows if x["sku"] == w["sku"]), None)
+        if not e:
+            status = "BRAK W ERP"
+            erp_qty = None
+        elif e["qty"] != w["qty"]:
+            status = "RÓŻNA ILOŚĆ"
+            erp_qty = e["qty"]
+        else:
+            status = "OK"
+            erp_qty = e["qty"]
 
-ERP:
-{erp_list_str}
-"""
+        result.append({
+            "sku": w["sku"],
+            "wz_qty": w["qty"],
+            "erp_qty": erp_qty,
+            "status": status
+        })
 
-    completion = openai.ChatCompletion.create(
-      model="gpt-4.1",
-      messages=[
-        {"role":"system","content":system_prompt},
-        {"role":"user","content":user_prompt}
-      ],
-      temperature=0.1
-    )
-
-    # parse response
-    text = completion.choices[0].message["content"]
-    return {"result": text}
+    return {"result": result}
