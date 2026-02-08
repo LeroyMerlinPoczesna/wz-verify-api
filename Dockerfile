@@ -1,5 +1,6 @@
 FROM python:3.11-slim
 
+# OCR + PDF dependencies
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-pol \
