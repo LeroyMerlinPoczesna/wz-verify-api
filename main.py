@@ -1,11 +1,8 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
-import os, csv, io, json
+import re
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-app = FastAPI(title="Logistics AI Platform 2026")
+app = FastAPI(title="Logistics AI – WZ Verify")
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,76 +12,94 @@ app.add_middleware(
 )
 
 @app.get("/")
-def health():
-    return {"status": "OK", "system": "Logistics AI 2026"}
+def root():
+    return {"ok": True}
 
-def parse_table(text: str):
+
+# =========================
+# ENTERPRISE TEXT PARSER
+# =========================
+def parse_text(raw: str):
     rows = []
-    reader = csv.reader(io.StringIO(text), delimiter="\t")
-    for r in reader:
-        if len(r) >= 2:
-            try:
-                qty = float(r[1].replace(",", "."))
-            except:
-                qty = 0
-            rows.append({"sku": r[0].strip(), "qty": qty})
+
+    # normalizacja
+    raw = raw.replace("\r", "\n")
+    lines = raw.split("\n")
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # usuwamy śmieci OCR
+        line = re.sub(r"[|;,]", " ", line)
+        line = re.sub(r"\s+", " ", line)
+
+        parts = line.split(" ")
+
+        if len(parts) < 2:
+            continue
+
+        sku = parts[0]
+
+        try:
+            qty = float(parts[1].replace(",", "."))
+        except ValueError:
+            continue
+
+        rows.append({
+            "sku": sku,
+            "qty": qty
+        })
+
     return rows
 
-@app.post("/compare")
-async def compare(table: str = Form(...), wz: UploadFile = File(...)):
-    wz_text = (await wz.read()).decode("utf-8", errors="ignore")
-    wz_rows = parse_table(wz_text)
-    erp_rows = parse_table(table)
+
+# =========================
+# COMPARE
+# =========================
+@app.post("/compare-ai")
+async def compare_ai(
+    erp_text: str = Form(...),
+    wz: UploadFile = File(...)
+):
+    try:
+        wz_text = (await wz.read()).decode(errors="ignore")
+    except Exception:
+        raise HTTPException(400, "Nie można odczytać pliku WZ")
+
+    wz_rows = parse_text(wz_text)
+    erp_rows = parse_text(erp_text)
 
     result = []
+
     for w in wz_rows:
         match = next((e for e in erp_rows if e["sku"] == w["sku"]), None)
+
         if not match:
-            status = "BRAK W ERP"
+            result.append({
+                "sku": w["sku"],
+                "wz_qty": w["qty"],
+                "erp_qty": None,
+                "status": "BRAK W ERP"
+            })
         elif match["qty"] != w["qty"]:
-            status = "RÓŻNA ILOŚĆ"
+            result.append({
+                "sku": w["sku"],
+                "wz_qty": w["qty"],
+                "erp_qty": match["qty"],
+                "status": "RÓŻNA ILOŚĆ"
+            })
         else:
-            status = "OK"
-        result.append({**w, "status": status})
+            result.append({
+                "sku": w["sku"],
+                "wz_qty": w["qty"],
+                "erp_qty": match["qty"],
+                "status": "OK"
+            })
 
-    return {"result": result}
-
-@app.post("/compare-ai")
-async def compare_ai(wz: UploadFile = File(...), erp_text: str = Form(...)):
-    wz_bytes = await wz.read()
-
-    response = client.responses.create(
-        model="gpt-4.1",
-        input=f"""
-Odczytaj WZ i porównaj z ERP.
-
-WZ:
-{wz_bytes[:4000]}
-
-ERP:
-{erp_text}
-
-Zwróć JSON:
-[
- {{ "sku": "...", "wz_qty": 0, "erp_qty": 0, "status": "OK|RÓŻNA ILOŚĆ|BRAK W ERP" }}
-]
-"""
-    )
-
-    return {"ai_result": response.output_text}
-
-@app.get("/metrics")
-def metrics():
     return {
-        "checked_docs": 124,
-        "errors": 7,
-        "accuracy": "94.3%"
+        "count_wz": len(wz_rows),
+        "count_erp": len(erp_rows),
+        "items": result
     }
-
-@app.post("/chat")
-async def chat(question: str = Form(...)):
-    r = client.responses.create(
-        model="gpt-4.1",
-        input=f"Jesteś ekspertem logistyki. Odpowiedz: {question}"
-    )
-    return {"answer": r.output_text}
