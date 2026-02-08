@@ -7,8 +7,11 @@ import pytesseract
 from pdf2image import convert_from_bytes
 import tempfile
 
-app = FastAPI(title="WZ Verifier 2.0")
+app = FastAPI(title="WZ Verifier AI")
 
+@app.get("/")
+def root():
+    return {"status": "ok"}
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
