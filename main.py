@@ -32,7 +32,7 @@ def parse_text(text: str):
             rows.append({"sku": r[0].strip(), "qty": qty})
     return rows
 
-@app.post("/compare")
+@app.post("/compare-ai")
 async def compare(
     wz: UploadFile = File(...),
     erp_text: Optional[str] = Form(None),
