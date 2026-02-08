@@ -5,19 +5,20 @@ import io
 from PIL import Image
 import pytesseract
 from pdf2image import convert_from_bytes
-import tempfile
+from rapidfuzz import fuzz
 
-app = FastAPI(title="WZ Verifier AI")
+app = FastAPI(title="WZ Verifier 2.0")
 
-@app.get("/")
-def root():
-    return {"status": "ok"}
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
 
 def parse_text(text: str):
     rows = []
@@ -42,6 +43,18 @@ def parse_file(file: UploadFile):
         text = file.file.read().decode(errors="ignore")
     return text
 
+def find_match_fuzzy(w_sku, erp_rows, threshold=90):
+    best = None
+    best_score = 0
+    for e in erp_rows:
+        score = fuzz.ratio(w_sku, e["sku"])
+        if score > best_score:
+            best_score = score
+            best = e
+    if best_score >= threshold:
+        return best
+    return None
+
 @app.post("/compare-ai")
 async def compare_ai(
     table: str = Form(...),
@@ -52,8 +65,9 @@ async def compare_ai(
     erp_rows = parse_text(table)
 
     result = []
+    # WZ → ERP
     for i, w in enumerate(wz_rows):
-        match = next((e for e in erp_rows if e["sku"] == w["sku"]), None)
+        match = find_match_fuzzy(w["sku"], erp_rows)
         if not match:
             status = "BRAK W ERP"
         elif match["qty"] != w["qty"]:
@@ -62,4 +76,10 @@ async def compare_ai(
             status = "OK"
         result.append({**w, "status": status, "progress": round((i+1)/len(wz_rows)*100, 1)})
 
-    return {"result": result, "ocr_preview": wz_text[:1000]}  # first 1000 chars for preview
+    # ERP → WZ (brak w WZ)
+    for e in erp_rows:
+        match = find_match_fuzzy(e["sku"], wz_rows)
+        if not match:
+            result.append({"sku": e["sku"], "qty": e["qty"], "status": "BRAK W WZ", "progress": 100})
+
+    return {"result": result, "ocr_preview": wz_text[:1000]}
